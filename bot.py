@@ -6,7 +6,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 from database import (
     add_user_channel, remove_user_channel, get_user_channels,
     add_all_channel, get_all_channels, get_channel_owner,
-    add_post_request, get_pending_requests, update_post_request_status
+    add_post_request, get_pending_requests
 )
 
 # Загрузка переменных окружения из файла .env
@@ -91,20 +91,21 @@ async def check_if_bot_can_post_messages(chat_id: str) -> bool:
 async def create_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     user_channels = get_user_channels(user_id)
-
+    
     if not user_channels['channels']:
-        await update.message.reply_text('У вас нет привязанных каналов. Используйте /addchannel @channel_name для добавления канала.')
+        await update.message.reply_text(
+            'У вас нет привязанных каналов. Используйте /addchannel @channel_name для добавления канала.'
+        )
         return
 
     all_channels = get_all_channels()
 
-    if not all_channels:
+    if all_channels:
+        keyboard = [[InlineKeyboardButton(f'@{channel}', callback_data=f'create_request_{channel}')] for channel in all_channels]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text('Выберите канал для взаимного поста:', reply_markup=reply_markup)
+    else:
         await update.message.reply_text('В базе данных нет доступных каналов для взаимного поста.')
-        return
-
-    keyboard = [[InlineKeyboardButton(f'@{channel}', callback_data=f'create_request_{channel}')] for channel in all_channels]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text('Выберите канал для взаимного поста:', reply_markup=reply_markup)
 
 # Функция для обработки нажатия кнопок выбора канала
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -112,14 +113,35 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     user_id = query.from_user.id
 
-    if data.startswith('create_request_'):
+    if data.startswith('confirm_') or data.startswith('decline_'):
+        _, channel_name, requester_id = data.split('_', 2)
+        requester_id = int(requester_id)
+
+        if data.startswith('confirm_'):
+            await query.message.reply_text(f'Запрос на взаимный пост от канала @{channel_name} подтвержден.')
+        else:
+            await query.message.reply_text(f'Запрос на взаимный пост от канала @{channel_name} отклонен.')
+
+        await query.message.delete()
+
+    elif data.startswith('create_request_'):
         channel_name = data[len('create_request_'):]
         post_requests[user_id] = channel_name
+        await query.message.reply_text(f'Вы выбрали канал @{channel_name}. Пожалуйста, отправьте шаблон поста.')
 
+        await query.message.delete()
+
+# Функция для получения шаблона поста
+async def receive_post_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    text = update.message.text
+
+    if user_id in post_requests:
+        channel_name = post_requests[user_id]
         owner_id = get_channel_owner(channel_name)
-        if owner_id:
-            post_template = "Пример шаблона поста"  # Заменить на фактический шаблон
 
+        if owner_id:
+            post_template = text
             keyboard = [
                 [InlineKeyboardButton("Подтвердить", callback_data=f'confirm_{channel_name}_{user_id}')],
                 [InlineKeyboardButton("Отклонить", callback_data=f'decline_{channel_name}_{user_id}')]
@@ -132,63 +154,14 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     text=f'Получен запрос на взаимный пост от канала @{channel_name}. Шаблон поста:\n\n{post_template}\n\nПодтвердите или отклоните запрос.',
                     reply_markup=reply_markup
                 )
-                await query.message.reply_text(f'Шаблон поста для канала @{channel_name} отправлен владельцу канала. Ожидайте подтверждения.')
+                await update.message.reply_text(f'Шаблон поста для канала @{channel_name} отправлен владельцу канала. Ожидайте подтверждения.')
+                add_post_request(user_id, channel_name, post_template, 'pending')
+                del post_requests[user_id]
             except Exception as e:
                 logger.error(f'Ошибка при отправке сообщения владельцу канала: {e}')
-                await query.message.reply_text('Не удалось отправить запрос владельцу канала.')
+                await update.message.reply_text('Не удалось отправить запрос владельцу канала.')
         else:
-            await query.message.reply_text(f'Не удалось найти владельца канала @{channel_name}.')
-
-        await query.message.delete()
-
-# Функция для обработки подтверждения или отклонения запроса
-async def handle_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    data = query.data
-    user_id = query.from_user.id
-
-    if data.startswith('confirm_'):
-        _, channel_name, requesting_user_id = data.split('_')
-        requesting_user_id = int(requesting_user_id)
-
-        update_post_request_status(requesting_user_id, channel_name, 'confirmed')
-
-        await query.message.reply_text(f'Запрос на взаимный пост для канала @{channel_name} подтвержден.')
-        try:
-            await application.bot.send_message(
-                chat_id=requesting_user_id,
-                text=f'Ваш запрос на взаимный пост в канале @{channel_name} был подтвержден владельцем канала.'
-            )
-        except Exception as e:
-            logger.error(f'Ошибка при отправке сообщения пользователю: {e}')
-    
-    elif data.startswith('decline_'):
-        _, channel_name, requesting_user_id = data.split('_')
-        requesting_user_id = int(requesting_user_id)
-
-        update_post_request_status(requesting_user_id, channel_name, 'declined')
-
-        await query.message.reply_text(f'Запрос на взаимный пост для канала @{channel_name} отклонен.')
-        try:
-            await application.bot.send_message(
-                chat_id=requesting_user_id,
-                text=f'Ваш запрос на взаимный пост в канале @{channel_name} был отклонен владельцем канала.'
-            )
-        except Exception as e:
-            logger.error(f'Ошибка при отправке сообщения пользователю: {e}')
-
-    await query.message.delete()
-
-# Функция для получения шаблона поста
-async def receive_post_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    text = update.message.text
-
-    if user_id in post_requests:
-        channel_name = post_requests[user_id]
-        add_post_request(user_id, channel_name, text, 'pending')
-        await update.message.reply_text(f'Шаблон поста для канала @{channel_name} отправлен владельцу канала. Ожидайте подтверждения.')
-        del post_requests[user_id]
+            await update.message.reply_text(f'Не удалось найти владельца канала @{channel_name}.')
     else:
         await update.message.reply_text('Нет активного запроса.')
 
@@ -202,28 +175,27 @@ async def process_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     response = 'Ваши активные запросы:\n'
-    for req in pending_requests:
-        response += f'Канал @{req["to_channel"]} - Статус: {req["status"]}\n'
+    for request in pending_requests:
+        response += f'Канал: @{request["channel_name"]}, Статус: {request["status"]}\n'
     
     await update.message.reply_text(response)
 
 # Основная функция
 def main():
-    import database
-    database.initialize_db()
-
     global application
     application = Application.builder().token(TOKEN).build()
 
-    # Обработчики команд и кнопок
-    application.add_handler(CommandHandler('start', start))
-    application.add_handler(CommandHandler('stats', stats))
-    application.add_handler(CommandHandler('addchannel', add_channel))
-    application.add_handler(CommandHandler('removechannel', remove_channel))
-    application.add_handler(CommandHandler('createpost', create_post))
-    application.add_handler(CommandHandler('requests', process_requests))
-    application.add_handler(CallbackQueryHandler(handle_response))
+    # Регистрация обработчиков команд
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("stats", stats))
+    application.add_handler(CommandHandler("addchannel", add_channel))
+    application.add_handler(CommandHandler("removechannel", remove_channel))
+    application.add_handler(CommandHandler("createpost", create_post))
+    application.add_handler(CommandHandler("requests", process_requests))
+
+    # Регистрация обработчиков сообщений и кнопок
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receive_post_template))
+    application.add_handler(CallbackQueryHandler(button))
 
     # Запуск бота
     application.run_polling()

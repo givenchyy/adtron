@@ -45,6 +45,7 @@ def add_all_channel(channel_name, owner_id):
     conn.commit()
     conn.close()
 
+# Функция для получения владельца канала
 def get_channel_owner(channel_name):
     conn = sqlite3.connect('channels.db')
     c = conn.cursor()
@@ -53,20 +54,7 @@ def get_channel_owner(channel_name):
     result = c.fetchone()
     conn.close()
 
-    if result:
-        return result[0]
-    return None
-
-    conn = sqlite3.connect('channels.db')
-    c = conn.cursor()
-
-    c.execute('SELECT owner_id FROM all_channels WHERE channel_name = ?', (channel_name,))
-    result = c.fetchone()
-    conn.close()
-
-    if result:
-        return result[0]
-    return None
+    return result[0] if result else None
 
 # Функция для добавления канала пользователя
 def add_user_channel(user_id, channel_name):
@@ -154,12 +142,3 @@ def get_all_channels():
     conn.close()
 
     return [row[0] for row in result]
-
-def update_post_request_status(from_user_id, to_channel, status):
-    conn = sqlite3.connect('channels.db')
-    c = conn.cursor()
-
-    c.execute('UPDATE post_requests SET status = ? WHERE from_user_id = ? AND to_channel = ?', (status, from_user_id, to_channel))
-    
-    conn.commit()
-    conn.close()
