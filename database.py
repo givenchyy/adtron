@@ -3,6 +3,7 @@ import os
 from dotenv import load_dotenv
 from telegram import Bot
 from telegram.error import TelegramError
+from utils.logger import setup_logger
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -123,7 +124,7 @@ def get_channel_subscribers(channel_name):
         chat = bot.get_chat(chat_id=channel_name)
         return chat.members_count
     except TelegramError as e:
-        logger.error(f'Ошибка при получении количества подписчиков для канала {channel_name}: {e}')
+        loggin.error(f'Ошибка при получении количества подписчиков для канала {channel_name}: {e}')
         return 0
 
 # Функция для обновления количества запросов пользователя
@@ -153,3 +154,17 @@ def get_top_users(limit=10):
     conn.close()
     return [{'user_id': user[0], 'request_count': user[1]} for user in top_users]
 
+
+def update_user_request_count(user_id):
+    conn = sqlite3.connect('channels.db')
+    c = conn.cursor()
+    
+    # Увеличиваем количество запросов пользователя
+    c.execute('''
+        INSERT INTO user_requests (user_id, request_count)
+        VALUES (?, 1)
+        ON CONFLICT(user_id) DO UPDATE SET request_count = request_count + 1
+    ''', (user_id,))
+    
+    conn.commit()
+    conn.close()

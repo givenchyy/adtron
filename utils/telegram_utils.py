@@ -1,3 +1,4 @@
+import logging
 from telegram import Bot
 
 async def check_if_bot_can_post_messages(bot: Bot, chat_id: str) -> bool:

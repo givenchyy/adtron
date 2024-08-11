@@ -1,18 +1,20 @@
 import logging
 import os
 import sqlite3
+import httpx
+import html
+from datetime import datetime
+from functools import wraps
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import CallbackQueryHandler, CommandHandler, MessageHandler, ContextTypes
+from telegram.ext import CallbackQueryHandler, CommandHandler, MessageHandler, ContextTypes, CallbackContext
 from database import (
     add_user_channel, remove_user_channel, get_user_channels,
     add_all_channel, get_all_channels, get_channel_owner,
     add_post_request, get_pending_requests, update_post_request_status,
-    get_top_users, update_request_count  # Убедитесь, что get_top_users импортирована
+    get_top_users, update_request_count, update_user_request_count  # Убедитесь, что get_top_users импортирована
 )
-import httpx
-import html
-from datetime import datetime
+
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -22,6 +24,38 @@ TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 post_requests = {}
 
 DATABASE = 'channels.db'
+
+
+async def check_subscription(user_id: int, bot) -> bool:
+    channel_username = '@adthrone'
+    try:
+        member = await bot.get_chat_member(chat_id=channel_username, user_id=user_id)
+        return member.status in ['member', 'administrator', 'creator']
+    except Exception as e:
+        logging.error(f'Ошибка при проверке подписки на канал {channel_username}: {e}')
+        return False
+    
+def require_subscription(func):
+    @wraps(func)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        user_id = update.message.from_user.id
+
+        # Проверяем, подписан ли пользователь на обязательный канал
+        if not await check_subscription(user_id, context.bot):
+            keyboard = [
+                [InlineKeyboardButton("Вступить в канал", url="https://t.me/adthrone")],
+                [InlineKeyboardButton("Проверить подписку", callback_data="check_subscription")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(
+                'Подпишитесь на канал @adthrone, чтобы использовать этого бота. После подписки, нажмите "Проверить подписку".',
+                reply_markup=reply_markup
+            )
+            return  # Прерываем выполнение команды, если пользователь не подписан
+
+        # Выполняем команду, если пользователь подписан
+        return await func(update, context, *args, **kwargs)
+    return wrapper
 
 # Функция для получения количества подписчиков канала
 async def get_channel_subscribers_count(chat_id: str, bot) -> int:
@@ -86,10 +120,25 @@ async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("Топ пользователей пуст. Не было запросов.")
 
-        
+    
+async def check_subscription_callback(update: Update, context: CallbackContext):
+    query = update.callback_query
+    user_id = query.from_user.id
+
+    # Проверяем, подписан ли пользователь на обязательный канал
+    if await check_subscription(user_id, context.bot):
+        await query.message.reply_text('Спасибо за подписку! Теперь вы можете использовать бота.')
+        # Здесь вы можете выполнить нужное действие, например, вызвать команду /start
+        await start(update, context)
+    else:
+        await query.message.reply_text(
+            'Вы еще не подписаны на канал @adthrone. Пожалуйста, подпишитесь и нажмите кнопку снова.'
+        )
 # Функция для старта бота
+@require_subscription
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text('Привет! Я бот для управления постами в каналах.')
+    user_id = update.message.from_user.id
+    await update.message.reply_text('Добро пожаловать! Вы успешно подписаны на канал.')
 
 async def is_user_member_of_channel(user_id: int, channel_username: str, bot) -> bool:
     try:
@@ -100,10 +149,12 @@ async def is_user_member_of_channel(user_id: int, channel_username: str, bot) ->
         return False
 
 # Функция для обработки команды /stats
+@require_subscription
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Ваш код для обработки команды /stats
     user_id = update.message.from_user.id
-    user_channels = get_user_channels(user_id)
     username = await get_username(user_id, TOKEN)
+    user_channels = get_user_channels(user_id)
 
     if not user_channels['channels']:
         await update.message.reply_text(
@@ -111,7 +162,6 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Получение количества запросов пользователя
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
     c.execute('SELECT request_count FROM user_requests WHERE user_id = ?', (user_id,))
@@ -120,7 +170,6 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     request_count = result[0] if result else 0
 
-    # Формируем текст ответа
     response = f'🌟 <b>Личный кабинет пользователя</b> {"@" + username if username else ""} 🌟\n\n'
     response += '<b>Привязанные каналы:</b>\n'
     for index, channel in enumerate(user_channels['channels'], start=1):
@@ -128,12 +177,12 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     response += f'\n<b>Вы сделали {request_count} запросов на взаимные посты.</b>\n\n'
     response += '🛠️ <b>Доступные команды:</b>\n'
+    response += '🔹 <code>/stats — показать статистику пользователя\n'
     response += '🔹 <code>/addchannel @channel_name</code> — добавить канал\n'
     response += '🔹 <code>/removechannel @channel_name</code> — удалить канал\n'
     response += '🔹 <code>/createpost</code> — создать запрос на взаимный пост\n'
     response += '🔹 <code>/top</code> — топ пользователей\n'
 
-    # Добавляем дату и время последнего обновления
     current_time = datetime.now().strftime('%d.%m.%Y %H:%M:%S')
     response += f'\n<b>Обновлено:</b> {current_time}'
 
@@ -146,7 +195,9 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Произошла ошибка при попытке отправить сообщение.")
 
 # Функция для добавления канала
+@require_subscription
 async def add_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Ваш код для обработки команды /addchannel
     user_id = update.message.from_user.id
     if not context.args:
         await update.message.reply_text('Пожалуйста, укажите название канала после команды. Пример: /addchannel @channel_name')
@@ -163,7 +214,9 @@ async def add_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f'Пожалуйста, убедитесь, что я имею право "Отправлять сообщения" в канале @{channel_name}.')
 
 # Функция для удаления канала
+@require_subscription
 async def remove_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Ваш код для обработки команды /removechannel
     user_id = update.message.from_user.id
     if not context.args:
         await update.message.reply_text('Пожалуйста, укажите название канала после команды. Пример: /removechannel @channel_name')
@@ -183,36 +236,33 @@ async def check_if_bot_can_post_messages(chat_id: str, bot) -> bool:
         return False
 
 # Функция для создания запроса на взаимный пост
+@require_subscription
 async def create_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        user_id = update.message.from_user.id
-        user_channels = get_user_channels(user_id)
+    # Ваш код для обработки команды /createpost
+    user_id = update.message.from_user.id
+    user_channels = get_user_channels(user_id)
 
-        if not user_channels['channels']:
-            await update.message.reply_text(
-                'У вас нет привязанных каналов. Используйте /addchannel @channel_name для добавления канала.'
-            )
-            return
+    if not user_channels['channels']:
+        await update.message.reply_text(
+            'У вас нет привязанных каналов. Используйте /addchannel @channel_name для добавления канала.'
+        )
+        return
 
-        all_channels = get_all_channels()
-        # Имя вашего канала, который нужно исключить
-        my_channel_name = get_channel_name_by_user_id(user_id)
+    all_channels = get_all_channels()
+    my_channel_name = get_channel_name_by_user_id(user_id)
 
-        if all_channels:
-            keyboard = [
-                [InlineKeyboardButton(f'@{channel} ({await get_channel_subscribers_count(f"@{channel}", context.bot)} подписчиков)', callback_data=f'select_channel_{channel}')]
-                for channel in all_channels
-                if channel != my_channel_name  # Исключаем ваш канал
-            ]
-            
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text('Выберите канал для взаимного поста:', reply_markup=reply_markup)
-        else:
-            await update.message.reply_text('В базе данных нет доступных каналов для взаимного поста.')
+    if all_channels:
+        keyboard = [
+            [InlineKeyboardButton(f'@{channel} ({await get_channel_subscribers_count(f"@{channel}", context.bot)} подписчиков)', callback_data=f'select_channel_{channel}')]
+            for channel in all_channels
+            if channel != my_channel_name
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text('Выберите канал для взаимного поста:', reply_markup=reply_markup)
+    else:
+        await update.message.reply_text('В базе данных нет доступных каналов для взаимного поста.')
 
-    except Exception as e:
-        logging.error(f'Ошибка в create_post: {e}')
-        await update.message.reply_text('Произошла ошибка. Попробуйте снова.')
 
 
 # Функция для обработки нажатия кнопок выбора канала
@@ -320,19 +370,6 @@ async def receive_post_template(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text('Ваш запрос не найден или уже завершен.')
 
 
-def update_user_request_count(user_id):
-    conn = sqlite3.connect(DATABASE)
-    c = conn.cursor()
-    
-    # Увеличиваем количество запросов пользователя
-    c.execute('''
-        INSERT INTO user_requests (user_id, request_count)
-        VALUES (?, 1)
-        ON CONFLICT(user_id) DO UPDATE SET request_count = request_count + 1
-    ''', (user_id,))
-    
-    conn.commit()
-    conn.close()
 
 # Обработка обратного шаблона (владельца канала)
 async def handle_reverse_post(user_id: int, channel_name: str, bot):
