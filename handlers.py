@@ -295,18 +295,26 @@ def get_channel_name_by_user_id(user_id: int) -> str:
 async def handle_confirm(requester_id: int, channel_name: str, bot):
     request = post_requests.get(requester_id)
     if request and request.get('stage') == 'request_sent':
-        post_template = request.get('post_template', '')
         owner_id = get_channel_owner(channel_name)
 
         if owner_id:
             try:
                 requesting_channel_name = get_channel_name_by_user_id(requester_id)
                 if requesting_channel_name != channel_name:  # Исключаем случаи, когда каналы совпадают
-                    logging.info(f'Отправка поста в канал @{channel_name} с шаблоном: {post_template}')
-                    await bot.send_message(chat_id=f'@{channel_name}', text=post_template)
+                    if 'photo' in request:  # Если есть фото
+                        photo_file = request['photo']
+                        caption = request.get('caption', '')  # Получаем подпись, если есть
+                        logging.info(f'Отправляем фото в канал @{channel_name} с caption: {caption}')
+                        await bot.send_photo(chat_id=f'@{channel_name}', photo=photo_file, caption=caption)
+                    else:  # Если только текст
+                        post_template = request.get('post_template', '')
+                        logging.info(f'Отправляем текст в канал @{channel_name}: {post_template}')
+                        await bot.send_message(chat_id=f'@{channel_name}', text=post_template)
+
+                    # Отправка сообщения в канал, где был запрос
                     await bot.send_message(chat_id=requester_id, text=f'Ваш пост был успешно опубликован в канале @{channel_name}.')
 
-                    post_requests[owner_id] = {'channel_name': requesting_channel_name, 'post_template': None, 'stage': 'awaiting_reverse_post'}
+                    post_requests[owner_id] = {'channel_name': requesting_channel_name, 'stage': 'awaiting_reverse_post'}
                     await bot.send_message(chat_id=owner_id, text=f'Теперь, пожалуйста, отправьте шаблон поста для канала @{requesting_channel_name}.')
 
                     update_post_request_status(requester_id, channel_name, 'completed')
@@ -316,12 +324,13 @@ async def handle_confirm(requester_id: int, channel_name: str, bot):
                     await bot.send_message(chat_id=requester_id, text='Вы не можете отправить пост в ваш собственный канал.')
 
             except Exception as e:
-                logging.error(f'Ошибка при отправке сообщения в канал {channel_name}: {e}')
+                logging.error(f'Ошибка при отправке сообщения в канал @{channel_name}: {e}')
                 await bot.send_message(chat_id=requester_id, text='Не удалось отправить ваш пост в канал. Попробуйте позже.')
         else:
             await bot.send_message(chat_id=requester_id, text=f'Не удалось найти владельца канала @{channel_name}.')
     else:
         await bot.send_message(chat_id=requester_id, text='Не удалось найти шаблон поста для данного канала.')
+
 
 
 # Обработка отклонения запроса
@@ -342,24 +351,33 @@ async def handle_channel_selection(update: Update, context: ContextTypes.DEFAULT
 # Функция для получения шаблона поста
 async def receive_post_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    text = update.message.text
 
     if user_id in post_requests:
         request = post_requests[user_id]
         if request.get('stage') == 'completed':
             return
-        
+
         channel_name = request['channel_name']
         owner_id = get_channel_owner(channel_name)
 
         if owner_id:
-            post_requests[user_id]['post_template'] = text
-
+            if update.message.photo:
+                # Если получена фотография, сохраняем ее
+                photo_file = update.message.photo[-1].file_id
+                post_requests[user_id]['photo'] = photo_file
+                post_requests[user_id]['caption'] = update.message.caption or ''
+                await update.message.reply_text('Шаблон поста с фотографией успешно принят.')
+            elif update.message.text:
+                # Если получен текст, сохраняем его
+                post_requests[user_id]['post_template'] = update.message.text
+                await update.message.reply_text('Шаблон поста успешно принят.')
+            
+            # После получения шаблона отправляем запрос владельцу канала
             if request['stage'] == 'request_sent':
                 if user_id == owner_id:
                     await handle_reverse_post(user_id, channel_name, context.bot)
                 else:
-                    await send_post_request_to_owner(user_id, channel_name, text, context.bot)
+                    await send_post_request_to_owner(user_id, channel_name, context.bot)
                 update_user_request_count(user_id)
             elif request['stage'] == 'awaiting_reverse_post':
                 await handle_reverse_post(user_id, channel_name, context.bot)
@@ -371,13 +389,16 @@ async def receive_post_template(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 
+
 # Обработка обратного шаблона (владельца канала)
 async def handle_reverse_post(user_id: int, channel_name: str, bot):
     original_channel = post_requests[user_id]['channel_name']
-    post_template = post_requests[user_id]['post_template']
-    
-    logging.info(f'Отправка обратного поста в канал @{original_channel} с шаблоном: {post_template}')
-    await bot.send_message(chat_id=f'@{original_channel}', text=post_template)
+
+    if 'photo' in post_requests[user_id]:  # Если есть фото
+        await bot.send_photo(chat_id=f'@{original_channel}', photo=post_requests[user_id]['photo'], caption=post_requests[user_id].get('caption', ''))
+    else:  # Если только текст
+        await bot.send_message(chat_id=f'@{original_channel}', text=post_requests[user_id]['post_template'])
+
     await bot.send_message(chat_id=user_id, text=f'Ваш пост был успешно опубликован в канале @{original_channel}.')
 
     post_requests[user_id]['stage'] = 'completed'  # Обновляем этап
@@ -386,7 +407,7 @@ async def handle_reverse_post(user_id: int, channel_name: str, bot):
     del post_requests[user_id]  # Удаляем завершенный запрос
 
 # Отправка запроса владельцу канала
-async def send_post_request_to_owner(requester_id: int, channel_name: str, post_template: str, bot):
+async def send_post_request_to_owner(requester_id: int, channel_name: str, bot):
     owner_id = get_channel_owner(channel_name)
     if not owner_id:
         logging.error(f'Не удалось найти владельца канала @{channel_name}.')
@@ -394,13 +415,34 @@ async def send_post_request_to_owner(requester_id: int, channel_name: str, post_
 
     logging.info(f'Отправляем запрос владельцу канала @{channel_name}.')
 
+    request = post_requests.get(requester_id, {})
+    post_template = request.get('post_template', '')
+    photo_file = request.get('photo')
+    caption = request.get('caption', '') or post_template
+
     keyboard = [
         [InlineKeyboardButton("Принять", callback_data=f'confirm_{channel_name}_{requester_id}'),
          InlineKeyboardButton("Отклонить", callback_data=f'decline_{channel_name}_{requester_id}')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
+
     try:
-        response = await bot.send_message(chat_id=owner_id, text=f'Поступил запрос на взаимный пост от @{channel_name}. Шаблон:\n\n{post_template}', reply_markup=reply_markup)
+        if photo_file:
+            # Если есть фото, отправляем фото с подписью
+            response = await bot.send_photo(
+                chat_id=owner_id,
+                photo=photo_file,
+                caption=caption,
+                reply_markup=reply_markup
+            )
+        else:
+            # Если нет фото, отправляем только текст
+            response = await bot.send_message(
+                chat_id=owner_id,
+                text=f'Поступил запрос на взаимный пост от @{channel_name}. Шаблон:\n\n{post_template}',
+                reply_markup=reply_markup
+            )
+
         logging.info(f'Запрос на пост отправлен владельцу канала @{channel_name}. Ответ: {response}')
     except Exception as e:
         logging.error(f'Ошибка при отправке запроса владельцу канала @{channel_name}: {e}')

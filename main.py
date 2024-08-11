@@ -29,7 +29,7 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receive_post_template))
     application.add_handler(CommandHandler('top', top))
     application.add_handler(CallbackQueryHandler(check_subscription_callback, pattern="check_subscription"))
-
+    application.add_handler(MessageHandler(filters.PHOTO, receive_post_template))
 
     # Обработка нажатий на инлайн-кнопки
     application.add_handler(CallbackQueryHandler(button))
