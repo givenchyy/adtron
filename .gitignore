@@ -1,3 +1,4 @@
 .env
 /__pycache__
 channels.db
+bot.py.example

@@ -43,6 +43,14 @@ def initialize_db():
         )
     ''')
 
+    # Создаем таблицу статистики запросов
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS user_requests (
+            user_id INTEGER PRIMARY KEY,
+            request_count INTEGER DEFAULT 0
+        )
+    ''')
+
     conn.commit()
     conn.close()
 
@@ -116,6 +124,10 @@ def add_post_request(from_user_id, to_channel, post_template, status):
     c.execute('INSERT INTO post_requests (from_user_id, to_channel, post_template, status) VALUES (?, ?, ?, ?)',
               (from_user_id, to_channel, post_template, status))
     conn.commit()
+
+    # Обновляем количество запросов для пользователя
+    update_request_count(from_user_id, conn)
+
     conn.close()
 
 # Функция для получения всех активных запросов пользователя
@@ -152,3 +164,26 @@ def get_channel_subscribers(channel_name):
     except TelegramError as e:
         logger.error(f'Ошибка при получении количества подписчиков для канала {channel_name}: {e}')
         return 0
+
+# Функция для обновления количества запросов пользователя
+def update_request_count(user_id, conn):
+    c = conn.cursor()
+    c.execute('SELECT request_count FROM user_requests WHERE user_id = ?', (user_id,))
+    result = c.fetchone()
+
+    if result:
+        request_count = result[0] + 1
+        c.execute('UPDATE user_requests SET request_count = ? WHERE user_id = ?', (request_count, user_id))
+    else:
+        c.execute('INSERT INTO user_requests (user_id, request_count) VALUES (?, ?)', (user_id, 1))
+    
+    conn.commit()
+
+# Функция для получения топ пользователей по количеству запросов
+def get_top_users(limit=10):
+    conn = sqlite3.connect('channels.db')
+    c = conn.cursor()
+    c.execute('SELECT user_id, request_count FROM user_requests ORDER BY request_count DESC LIMIT ?', (limit,))
+    top_users = c.fetchall()
+    conn.close()
+    return [{'user_id': user[0], 'request_count': user[1]} for user in top_users]
