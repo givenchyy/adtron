@@ -1,4 +1,5 @@
 import logging
+import os
 from telegram import Bot
 
 async def check_if_bot_can_post_messages(bot: Bot, chat_id: str) -> bool:
@@ -8,3 +9,7 @@ async def check_if_bot_can_post_messages(bot: Bot, chat_id: str) -> bool:
     except Exception as e:
         logging.error(f'Ошибка при проверке прав: {e}')
         return False
+
+def is_admin(user_id):
+    admin_ids = [int(id) for id in os.getenv("ADMIN_IDS").split(",")]
+    return user_id in admin_ids

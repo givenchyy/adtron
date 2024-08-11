@@ -39,6 +39,23 @@ def initialize_db():
         )
     ''')
 
+    # Создаем таблицу заблокированных пользователей
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS blocked_users (
+            user_id INTEGER PRIMARY KEY
+        )
+    ''')
+
+    conn.commit()
+
+    # Проверяем наличие и добавляем колонку username в таблицу blocked_users, если её нет
+    try:
+        c.execute('ALTER TABLE blocked_users ADD COLUMN username TEXT')
+    except sqlite3.OperationalError as e:
+        # Колонка уже существует или другая ошибка
+        if 'duplicate column name: username' not in str(e):
+            print(f"Ошибка при добавлении колонки: {e}")
+
     conn.commit()
     conn.close()
 

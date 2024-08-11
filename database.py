@@ -154,8 +154,24 @@ def get_top_users(limit=10):
     conn.close()
     return [{'user_id': user[0], 'request_count': user[1]} for user in top_users]
 
+def get_all_users():
+    conn = sqlite3.connect('channels.db')
+    c = conn.cursor()
+    c.execute('SELECT user_id FROM user_channels')
+    users = c.fetchall()
+    conn.close()
+    return [user[0] for user in users]  # Преобразуем в список ID пользователей
 
-def update_user_request_count(user_id):
+def get_all_blocked_users():
+    conn = sqlite3.connect('channels.db')
+    c = conn.cursor()
+    c.execute('SELECT user_id FROM blocked_users')
+    blocked_users = c.fetchall()
+    conn.close()
+    return [user[0] for user in blocked_users]  # Преобразуем в список ID пользователей
+
+
+def update_user_request_count(user_id)  :
     conn = sqlite3.connect('channels.db')
     c = conn.cursor()
     

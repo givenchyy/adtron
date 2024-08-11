@@ -3,8 +3,11 @@ from dotenv import load_dotenv
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler
 from handlers import check_subscription_callback, start, stats, add_channel, remove_channel, create_post, receive_post_template, button, top
 from utils.logger import setup_logger
+from admin_panel.admin_panel import register_admin_handlers
 from initialize_db import initialize_db  # Импортируйте функцию инициализации
+from admin_panel.admin_panel import handle_admin_panel_callback   # Добавляем обработчики для админ-панели
 
+# Инициализация базы данных
 initialize_db()
 
 # Загрузка переменных окружения
@@ -30,9 +33,10 @@ def main():
     application.add_handler(CommandHandler('top', top))
     application.add_handler(CallbackQueryHandler(check_subscription_callback, pattern="check_subscription"))
     application.add_handler(MessageHandler(filters.PHOTO, receive_post_template))
+    
 
-    # Обработка нажатий на инлайн-кнопки
-    application.add_handler(CallbackQueryHandler(button))
+    # Обработка нажатий на инлайн-кнопки для админ-панели
+    register_admin_handlers(application)
 
     application.run_polling()
 

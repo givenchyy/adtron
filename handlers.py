@@ -6,14 +6,15 @@ import html
 from datetime import datetime
 from functools import wraps
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import CallbackQueryHandler, CommandHandler, MessageHandler, ContextTypes, CallbackContext
+from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import CallbackQueryHandler, CommandHandler, MessageHandler, CallbackContext, filters, ContextTypes
 from database import (
     add_user_channel, remove_user_channel, get_user_channels,
     add_all_channel, get_all_channels, get_channel_owner,
     add_post_request, get_pending_requests, update_post_request_status,
-    get_top_users, update_request_count, update_user_request_count  # Убедитесь, что get_top_users импортирована
+    get_top_users, update_request_count, update_user_request_count, get_all_users  # Убедитесь, что get_top_users импортирована
 )
+from utils.telegram_utils import is_admin  # Проверка на админа
 
 
 # Загрузка переменных окружения
@@ -35,11 +36,29 @@ async def check_subscription(user_id: int, bot) -> bool:
         logging.error(f'Ошибка при проверке подписки на канал {channel_username}: {e}')
         return False
     
+def is_user_blocked(user_id: int) -> bool:
+    conn = sqlite3.connect('channels.db')
+    c = conn.cursor()
+    c.execute('SELECT 1 FROM blocked_users WHERE user_id = ?', (user_id,))
+    result = c.fetchone()
+    conn.close()
+    return result is not None
+
 def require_subscription(func):
     @wraps(func)
-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+    async def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
         user_id = update.message.from_user.id
-
+        
+        # Проверяем, является ли пользователь администратором
+        if is_admin(user_id):
+            # Если пользователь администратор, пропускаем проверку блокировки и подписки
+            return await func(update, context, *args, **kwargs)
+        
+        # Проверяем, заблокирован ли пользователь
+        if is_user_blocked(user_id):
+            await update.message.reply_text("Вы заблокированы и не имеете права выполнять команды.")
+            return  # Прерываем выполнение команды, если пользователь заблокирован
+        
         # Проверяем, подписан ли пользователь на обязательный канал
         if not await check_subscription(user_id, context.bot):
             keyboard = [
@@ -53,7 +72,7 @@ def require_subscription(func):
             )
             return  # Прерываем выполнение команды, если пользователь не подписан
 
-        # Выполняем команду, если пользователь подписан
+        # Выполняем команду, если пользователь подписан и не заблокирован
         return await func(update, context, *args, **kwargs)
     return wrapper
 
@@ -157,30 +176,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Произошла ошибка при попытке отправить сообщение.")
 
 # Функция для обработки команды /stats
+
 @require_subscription
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     username = await get_username(user_id, TOKEN)
     user_channels = get_user_channels(user_id)
 
-    if not user_channels['channels']:
-        await update.message.reply_text(
-            'У вас нет привязанных каналов. Добавьте каналы с помощью команды /addchannel @channel_name.'
-        )
-        return
+    # Создание основного сообщения
+    response = f'🌟 <b>Личный кабинет пользователя</b> {"@" + username if username else ""} 🌟\n\n'
+    response += '<b>Привязанные каналы:</b>\n'
+    for index, channel in enumerate(user_channels['channels'], start=1):
+        response += f'{index}. <a href="https://t.me/{channel}">@{channel}</a>\n'
 
+    # Если пользователь сделал запросы
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
     c.execute('SELECT request_count FROM user_requests WHERE user_id = ?', (user_id,))
     result = c.fetchone()
     conn.close()
-
     request_count = result[0] if result else 0
-
-    response = f'🌟 <b>Личный кабинет пользователя</b> {"@" + username if username else ""} 🌟\n\n'
-    response += '<b>Привязанные каналы:</b>\n'
-    for index, channel in enumerate(user_channels['channels'], start=1):
-        response += f'{index}. <a href="https://t.me/{channel}">@{channel}</a>\n'
 
     response += f'\n<b>Вы сделали {request_count} запросов на взаимные посты.</b>\n\n'
     response += '🛠️ <b>Доступные команды:</b>\n'
@@ -193,14 +208,13 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_time = datetime.now().strftime('%d.%m.%Y %H:%M:%S')
     response += f'\n<b>Обновлено:</b> {current_time}'
 
-    logging.info(f"Отправляемое сообщение: {response}")
-
-    try:
+    # Проверка, является ли пользователь администратором
+    if is_admin(user_id):
+        admin_button = InlineKeyboardButton("⚙️ Админ-панель", callback_data="admin_panel")
+        reply_markup = InlineKeyboardMarkup([[admin_button]])
+        await update.message.reply_text(response, parse_mode='HTML', reply_markup=reply_markup)
+    else:
         await update.message.reply_text(response, parse_mode='HTML')
-    except Exception as e:
-        logging.error(f'Ошибка при отправке сообщения: {e}')
-        await update.message.reply_text("Произошла ошибка при попытке отправить сообщение.")
-
 
 # Функция для добавления канала
 @require_subscription
