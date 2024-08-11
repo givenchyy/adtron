@@ -7,56 +7,13 @@ from telegram.error import TelegramError
 # Загрузка переменных окружения
 load_dotenv()
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-
 # Инициализация бота
 bot = Bot(token=BOT_TOKEN)
 
-# Инициализация базы данных
-def initialize_db():
-    conn = sqlite3.connect('channels.db')
-    c = conn.cursor()
-
-    # Создаем таблицу пользователей и их каналы
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS user_channels (
-            user_id INTEGER PRIMARY KEY,
-            channels TEXT
-        )
-    ''')
-
-    # Создаем таблицу запросов на взаимные посты
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS post_requests (
-            request_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            from_user_id INTEGER,
-            to_channel TEXT,
-            post_template TEXT,
-            status TEXT
-        )
-    ''')
-
-    # Создаем таблицу всех каналов
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS all_channels (
-            channel_name TEXT PRIMARY KEY,
-            owner_id INTEGER
-        )
-    ''')
-
-    # Создаем таблицу статистики запросов
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS user_requests (
-            user_id INTEGER PRIMARY KEY,
-            request_count INTEGER DEFAULT 0
-        )
-    ''')
-
-    conn.commit()
-    conn.close()
 
 # Функция для добавления нового канала в таблицу всех каналов
 def add_all_channel(channel_name, owner_id):
-    conn = sqlite3.connect('channels.db')
+    conn = sqlite3.connect("channels.db")
     c = conn.cursor()
     c.execute('INSERT OR REPLACE INTO all_channels (channel_name, owner_id) VALUES (?, ?)', (channel_name, owner_id))
     conn.commit()
@@ -121,13 +78,17 @@ def get_user_channels(user_id):
 def add_post_request(from_user_id, to_channel, post_template, status):
     conn = sqlite3.connect('channels.db')
     c = conn.cursor()
+    
+    # Вставляем новый запрос
     c.execute('INSERT INTO post_requests (from_user_id, to_channel, post_template, status) VALUES (?, ?, ?, ?)',
               (from_user_id, to_channel, post_template, status))
-    conn.commit()
-
+    
+    print(f'Inserted post request: from_user_id={from_user_id}, to_channel={to_channel}, post_template={post_template}, status={status}')
+    
     # Обновляем количество запросов для пользователя
     update_request_count(from_user_id, conn)
 
+    conn.commit()
     conn.close()
 
 # Функция для получения всех активных запросов пользователя
@@ -168,13 +129,17 @@ def get_channel_subscribers(channel_name):
 # Функция для обновления количества запросов пользователя
 def update_request_count(user_id, conn):
     c = conn.cursor()
+    
+    # Проверяем, есть ли пользователь в таблице
     c.execute('SELECT request_count FROM user_requests WHERE user_id = ?', (user_id,))
     result = c.fetchone()
 
     if result:
+        # Если есть, увеличиваем количество запросов
         request_count = result[0] + 1
         c.execute('UPDATE user_requests SET request_count = ? WHERE user_id = ?', (request_count, user_id))
     else:
+        # Если нет, создаем новую запись
         c.execute('INSERT INTO user_requests (user_id, request_count) VALUES (?, ?)', (user_id, 1))
     
     conn.commit()
@@ -187,3 +152,4 @@ def get_top_users(limit=10):
     top_users = c.fetchall()
     conn.close()
     return [{'user_id': user[0], 'request_count': user[1]} for user in top_users]
+
