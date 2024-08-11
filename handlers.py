@@ -127,7 +127,7 @@ async def check_subscription_callback(update: Update, context: CallbackContext):
 
     # Проверяем, подписан ли пользователь на обязательный канал
     if await check_subscription(user_id, context.bot):
-        await query.message.reply_text('Спасибо за подписку! Теперь вы можете использовать бота.')
+        await query.message.reply_text('Спасибо за подписку! Теперь вы можете использовать бота. /stats')
         # Здесь вы можете выполнить нужное действие, например, вызвать команду /start
         await start(update, context)
     else:
@@ -138,20 +138,27 @@ async def check_subscription_callback(update: Update, context: CallbackContext):
 @require_subscription
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    await update.message.reply_text('Добро пожаловать! Вы успешно подписаны на канал.')
+    
+    # Сообщение приветствия
+    response = 'Добро пожаловать! Вы успешно подписаны на канал.\n\n'
 
-async def is_user_member_of_channel(user_id: int, channel_username: str, bot) -> bool:
+    # Добавление списка доступных команд
+    response += '🛠️ <b>Доступные команды:</b>\n'
+    response += '🔹 <code>/stats</code> — показать статистику пользователя\n'
+    response += '🔹 <code>/addchannel @channel_name</code> — добавить канал\n'
+    response += '🔹 <code>/removechannel @channel_name</code> — удалить канал\n'
+    response += '🔹 <code>/createpost</code> — создать запрос на взаимный пост\n'
+    response += '🔹 <code>/top</code> — топ пользователей\n'
+
     try:
-        member = await bot.get_chat_member(chat_id=channel_username, user_id=user_id)
-        return member.status in ['member', 'administrator', 'creator']
+        await update.message.reply_text(response, parse_mode='HTML')
     except Exception as e:
-        logging.error(f'Ошибка при проверке членства в канале @{channel_username}: {e}')
-        return False
+        logging.error(f'Ошибка при отправке сообщения: {e}')
+        await update.message.reply_text("Произошла ошибка при попытке отправить сообщение.")
 
 # Функция для обработки команды /stats
 @require_subscription
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Ваш код для обработки команды /stats
     user_id = update.message.from_user.id
     username = await get_username(user_id, TOKEN)
     user_channels = get_user_channels(user_id)
@@ -177,7 +184,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     response += f'\n<b>Вы сделали {request_count} запросов на взаимные посты.</b>\n\n'
     response += '🛠️ <b>Доступные команды:</b>\n'
-    response += '🔹 <code>/stats — показать статистику пользователя\n'
+    response += '🔹 <code>/stats</code> — показать статистику пользователя\n'
     response += '🔹 <code>/addchannel @channel_name</code> — добавить канал\n'
     response += '🔹 <code>/removechannel @channel_name</code> — удалить канал\n'
     response += '🔹 <code>/createpost</code> — создать запрос на взаимный пост\n'
@@ -193,6 +200,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logging.error(f'Ошибка при отправке сообщения: {e}')
         await update.message.reply_text("Произошла ошибка при попытке отправить сообщение.")
+
 
 # Функция для добавления канала
 @require_subscription
@@ -330,8 +338,6 @@ async def handle_confirm(requester_id: int, channel_name: str, bot):
             await bot.send_message(chat_id=requester_id, text=f'Не удалось найти владельца канала @{channel_name}.')
     else:
         await bot.send_message(chat_id=requester_id, text='Не удалось найти шаблон поста для данного канала.')
-
-
 
 # Обработка отклонения запроса
 async def handle_decline(requester_id: int, channel_name: str, bot):
